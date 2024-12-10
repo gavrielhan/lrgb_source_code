@@ -23,7 +23,7 @@ class newGCN(torch.nn.Module):
         x = self.linear(x)
         return x
 
-
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # Load Dataset
 dataset = LRGBDataset(root='data/LRGBDataset', name='Peptides-struct')
 train_dataset = LRGBDataset(root='data/LRGBDataset', name='Peptides-struct', split='train')
@@ -37,7 +37,7 @@ model = newGCN(
     hidden_channels=300,
     num_layers=5,
     out_channels=11  # Number of regression tasks
-)
+).to(device)
 print(model)
 # Optimizer
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
@@ -59,11 +59,12 @@ def train():
     model.train()
     total_loss = 0
     for data in train_loader:
+        data = data.to(device)
+        optimizer.zero_grad()
         data.x = data.x.float()
         out = model(x=data.x, edge_index=data.edge_index, edge_attr=data.edge_attr, batch=data.batch)
         loss = criterion(out, data.y.float())
         loss.backward()
-        optimizer.zero_grad()
         optimizer.step()
         total_loss += loss.item()
     return total_loss / len(train_loader)
@@ -77,6 +78,7 @@ def test(loader):
 
     with torch.no_grad():
         for data in loader:
+            data = data.to(device)
             data.x = data.x.float()
             out = model(x=data.x, edge_index=data.edge_index, edge_attr=data.edge_attr, batch=data.batch)
             pred = out.cpu().numpy()
