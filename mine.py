@@ -14,12 +14,14 @@ class newGCN(torch.nn.Module):
     def __init__(self, in_channels, hidden_channels, num_layers, out_channels):
         super().__init__()
         self.gcn = GCN(in_channels=in_channels, hidden_channels=hidden_channels,out_channels=hidden_channels, num_layers=5)
+        self.bn = torch.nn.LayerNorm(hidden_channels)
         self.linear = torch.nn.Linear(hidden_channels, out_channels)
 
     def forward(self, x, edge_index, edge_attr=None, batch=None):
         # Preprocessing node features and edge attributes
         x = self.gcn(x=x, edge_index=edge_index, edge_attr=edge_attr)
         x = global_mean_pool(x,batch)
+        x = self.bn(x)
         x = self.linear(x)
         return x
 
@@ -41,13 +43,21 @@ model = newGCN(
 print(model)
 # Optimizer
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+# Learning rate scheduler
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer,
+    mode='min',
+    factor=0.5,
+    patience=20,
+    min_lr=1e-5
+)
 
 torch.manual_seed(3)
 
 print(f'Number of training graphs: {len(train_dataset)}')
 print(f'Number of test graphs: {len(test_dataset)}')
 
-train_loader = DataLoader(train_dataset, batch_size=200, shuffle=False)
+train_loader = DataLoader(train_dataset, batch_size=128, shuffle=False)
 val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
 test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
 
@@ -99,5 +109,7 @@ for epoch in range(1, 101):
     loss = train()
     val_mae, val_r2 = test(val_loader)
     test_mae, test_r2 = test(test_loader)
+     # Step the scheduler
+    scheduler.step(val_mae)
     print(f'Epoch {epoch:03d}, Loss: {loss:.4f}, Val MAE: {val_mae:.4f}, Val R2: {val_r2:.4f}, '
               f'Test MAE: {test_mae:.4f}, Test R2: {test_r2:.4f}')
