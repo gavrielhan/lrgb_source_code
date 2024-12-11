@@ -13,7 +13,7 @@ from torch_geometric.nn import GCN
 class newGCN(torch.nn.Module):
     def __init__(self, in_channels, hidden_channels, num_layers, out_channels):
         super().__init__()
-        self.gcn = GCN(in_channels=in_channels, hidden_channels=hidden_channels,out_channels=hidden_channels, num_layers=5)
+        self.gcn = GCN(in_channels=in_channels, hidden_channels=hidden_channels,out_channels=hidden_channels, num_layers=6)
         self.bn = torch.nn.LayerNorm(hidden_channels)
         self.linear = torch.nn.Linear(hidden_channels, out_channels)
 
@@ -36,8 +36,8 @@ test_dataset = LRGBDataset(root='data/LRGBDataset', name='Peptides-struct', spli
 # Initialize the GCN Model
 model = newGCN(
     in_channels=dataset.num_node_features,
-    hidden_channels=300,
-    num_layers=5,
+    hidden_channels=235,
+    num_layers=6,
     out_channels=11  # Number of regression tasks
 ).to(device)
 print(model)
@@ -57,7 +57,7 @@ torch.manual_seed(3)
 print(f'Number of training graphs: {len(train_dataset)}')
 print(f'Number of test graphs: {len(test_dataset)}')
 
-train_loader = DataLoader(train_dataset, batch_size=128, shuffle=False)
+train_loader = DataLoader(train_dataset, batch_size=200, shuffle=False)
 val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
 test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
 
@@ -105,7 +105,7 @@ def test(loader):
 
 
 # Training loop
-for epoch in range(1, 101):
+for epoch in range(1, 251):
     loss = train()
     val_mae, val_r2 = test(val_loader)
     test_mae, test_r2 = test(test_loader)
