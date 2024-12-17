@@ -1,6 +1,5 @@
 import torch
 import torch.nn.functional as F
-from torch_geometric.nn import GCNConv
 from torch_geometric.datasets import LRGBDataset
 from sklearn.metrics import r2_score
 from torch_geometric.nn import global_mean_pool
@@ -27,7 +26,7 @@ class newGCN(torch.nn.Module):
             torch.nn.Linear(hidden_channels, hidden_channels),
             torch.nn.BatchNorm1d(hidden_channels, track_running_stats=False),
             torch.nn.ReLU(),
-            torch.nn.Dropout(0.2),
+            torch.nn.Dropout(0.3),
 
             torch.nn.Linear(hidden_channels, hidden_channels),
             # torch.nn.BatchNorm1d(hidden_channels, track_running_stats=False),
