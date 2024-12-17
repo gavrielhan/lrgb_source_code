@@ -1,7 +1,6 @@
 import torch
 import torch.nn.functional as F
 from torch_geometric.datasets import LRGBDataset
-from sklearn.metrics import r2_score
 from torch_geometric.nn import global_mean_pool
 from torch_geometric.loader import DataLoader
 from sklearn.metrics import r2_score, mean_absolute_error
@@ -11,84 +10,164 @@ import matplotlib.pyplot as plt
 from IPython.display import clear_output
 from torch_geometric.transforms import AddLaplacianEigenvectorPE
 from torch_geometric.data import Data
+from torch.optim.lr_scheduler import LambdaLR
 
-
-class newGCN(torch.nn.Module):
-    def __init__(self, in_channels, hidden_channels, num_layers, out_channels):
-        super().__init__()
-        self.gcn = GCN(in_channels=in_channels, hidden_channels=hidden_channels, out_channels=hidden_channels,
-                       num_layers=6, act='relu', dropout=0.1, norm='batch', norm_kwargs={'track_running_stats': False})
-        # self.bn = torch.nn.BatchNorm1d(hidden_channels,track_running_stats=False)
-        # Add Laplacian eigenvector positional encoding transform
-        self.linear = torch.nn.Linear(hidden_channels, out_channels)
-        # Multi-layer prediction head
-        self.prediction_head = torch.nn.Sequential(
-            torch.nn.Linear(hidden_channels, hidden_channels),
-            torch.nn.BatchNorm1d(hidden_channels, track_running_stats=False),
-            torch.nn.ReLU(),
-            torch.nn.Dropout(0.3),
-
-            torch.nn.Linear(hidden_channels, hidden_channels),
-            # torch.nn.BatchNorm1d(hidden_channels, track_running_stats=False),
-            torch.nn.ReLU(),
-            # torch.nn.Dropout(0.2),
-
-            torch.nn.Linear(hidden_channels, out_channels)
-        )
-
-    def forward(self, x, edge_index, edge_attr=None, batch=None):
-        # Preprocessing node features and edge attributes
-        x = self.gcn(x=x, edge_index=edge_index, edge_attr=edge_attr)
-        x = global_mean_pool(x, batch)
-        # x = self.bn(x)
-        # x = self.linear(x)
-        x = self.prediction_head(x)
-
-        return x
-
-
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # Load Dataset
 dataset = LRGBDataset(root='data/LRGBDataset', name='Peptides-struct')
 train_dataset = LRGBDataset(root='data/LRGBDataset', name='Peptides-struct', split='train')
 val_dataset = LRGBDataset(root='data/LRGBDataset', name='Peptides-struct', split='val')
 test_dataset = LRGBDataset(root='data/LRGBDataset', name='Peptides-struct', split='test')
 
+# Define the Laplacian PE transform
+num_eigenvectors = 3 #number of eigenvectors
+pe_transform = AddLaplacianEigenvectorPE(k=num_eigenvectors, attr_name="lap_pe")
+
+
+# Apply the transformation to each data object and concatenate Laplacian PE
+def applyTransform(dataset):
+    transformed_dataset = []
+    for data in dataset:
+        data = pe_transform(data)
+
+        data.x = torch.cat([data.x, data.lap_pe], dim=1)
+        # print(data.x.shape)
+
+        transformed_dataset.append(data)
+
+    return transformed_dataset
+
+
+# Save the transformed dataset
+print('starting')
+dataset = applyTransform(dataset)
+print('done dataset')
+train_dataset = applyTransform(train_dataset)
+print('done train dataset')
+val_dataset = applyTransform(val_dataset)
+print('done val dataset')
+test_dataset = applyTransform(test_dataset)
+print('done test dataset')
+
+
+# mlp function from source code
+# define MLP head as defined in the second paepr of LRGB
+class MLPGraphHead(torch.nn.Module):
+    """
+    MLP prediction head for graph prediction tasks.
+
+    Args:
+        hidden_channels (int): Input dimension.
+        out_channels (int): Output dimension. For binary prediction, dim_out=1.
+        L (int): Number of hidden layers.
+    """
+
+    def __init__(self, hidden_channels, out_channels):
+        super().__init__()
+
+        self.pooling_fun = global_mean_pool
+        dropout = 0.1
+        L = 3
+
+        layers = []
+        for _ in range(L - 1):
+            layers.append(torch.nn.Dropout(dropout))
+            layers.append(torch.nn.Linear(hidden_channels, hidden_channels, bias=True))
+            layers.append(torch.nn.GELU())  # GELU before
+
+        # layers.append(torch.nn.BatchNorm1d(hidden_channels, track_running_stats=False))
+        layers.append(torch.nn.Dropout(dropout))
+        layers.append(torch.nn.Linear(hidden_channels, out_channels, bias=True))
+        self.mlp = torch.nn.Sequential(*layers)
+
+    # def _scale_and_shift(self, x):
+    # return x
+
+    def forward(self, batch):
+        x = self.pooling_fun(batch.x, batch.batch)
+        return self.mlp(x)
+
+# final function adding mlp head from source code
+class newGCN(torch.nn.Module):
+    def __init__(self, in_channels, hidden_channels, out_channels, num_layers):
+        super(newGCN, self).__init__()
+
+        # Define GCN layers with edge attributes
+        self.gcn = GCN(
+            in_channels=in_channels,
+            hidden_channels=hidden_channels,
+            out_channels=hidden_channels,
+            num_layers=num_layers,
+            act='gelu',
+            dropout=0.1,
+            norm='batch',
+            norm_kwargs={'track_running_stats': False}
+        )
+
+        # Replace the prediction head with MLPGraphHead
+        self.head = MLPGraphHead(hidden_channels, out_channels)
+
+    def forward(self, x, edge_index, edge_attr=None, batch=None):
+        # Apply GCN layers with edge attributes
+        x = self.gcn(x=x, edge_index=edge_index, edge_attr=edge_attr)
+
+        # Create a batch object for MLPGraphHead
+        batch_data = BatchData(x, batch)
+        # Pass through MLPGraphHead
+        return self.head(batch_data)
+
+
+
+class BatchData:
+    def __init__(self, x, batch):
+        self.x = x
+        self.batch = batch
+
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
 # Initialize the GCN Model
 model = newGCN(
-    in_channels=dataset.num_node_features,
+    in_channels=dataset[0].num_node_features,
     hidden_channels=235,
     num_layers=6,
     out_channels=11  # Number of regression tasks
 ).to(device)
 print(model)
+
 # Optimizer
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+
 # Learning rate scheduler
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-    optimizer,
-    mode='min',
-    factor=0.5,
-    patience=20,
-    min_lr=1e-5
-)
+# Define the warmup and cosine decay schedule
+def cosine_with_warmup(epoch):
+    if epoch < warmup_epochs:
+        # Linear warmup
+        return epoch / warmup_epochs
+    else:
+        # Cosine decay
+        progress = (epoch - warmup_epochs) / (total_epochs - warmup_epochs)
+        return 0.5 * (1 + np.cos(np.pi * progress))
+
+
+# Parameters
+warmup_epochs = 5
+total_epochs = 250  # Total training epochs
+
+# Define the scheduler
+scheduler = LambdaLR(optimizer, lr_lambda=cosine_with_warmup)
 
 torch.manual_seed(3)
 
 print(f'Number of training graphs: {len(train_dataset)}')
 print(f'Number of test graphs: {len(test_dataset)}')
 
-train_loader = DataLoader(train_dataset, batch_size=200, shuffle=False)
+train_loader = DataLoader(train_dataset, batch_size=200, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
 test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
 
 # Define the training loop
 criterion = torch.nn.L1Loss()  # For MAE-based regression
-
-
-def compute_laplacian_pe(data, k_lap=8):
-    transform = AddLaplacianEigenvectorPE(k=k_lap)
-    return transform(data)
 
 
 def train():
@@ -112,6 +191,7 @@ def test(loader):
     model.eval()
     all_preds = []
     all_labels = []
+    total_loss = 0  # Track loss for the scheduler
 
     with torch.no_grad():
         for data in loader:
@@ -119,6 +199,8 @@ def test(loader):
             data = data.to(device)
             data.x = data.x.float()
             out = model(x=data.x, edge_index=data.edge_index, edge_attr=data.edge_attr, batch=data.batch)
+            loss = criterion(out, data.y.float())  # Compute loss
+            total_loss += loss.item()
             pred = out.cpu().numpy()
             labels = data.y.cpu().numpy()  # Squeeze to remove single-dimensional entries
             all_preds.append(pred)
@@ -129,7 +211,7 @@ def test(loader):
 
     mae = mean_absolute_error(all_labels, all_preds)
     r2 = r2_score(all_labels, all_preds, multioutput='uniform_average')  # Average across all tasks
-    return mae, r2
+    return mae, r2, total_loss / len(loader)
 
 
 # Training
@@ -154,18 +236,20 @@ val_maes = []
 val_r2s = []
 
 # Training loop with live plotting
-for epoch in range(1, 251):
+for epoch in range(1, (total_epochs + 1)):
     # Clear the previous plots
     clear_output(wait=True)
 
     # Perform training and evaluation
     loss = train()
-    val_mae, val_r2 = test(val_loader)
-    test_mae, test_r2 = test(test_loader)
-    train_mae, train_r2 = test(train_loader)
+    # Perform validation and testing
+    val_mae, val_r2, val_loss = test(val_loader)
+    test_mae, test_r2, _ = test(test_loader)
+    train_mae, train_r2, _ = test(train_loader)
 
     # Step the scheduler
-    scheduler.step(val_mae)
+
+    scheduler.step()
 
     # Print epoch information
     print(f'Epoch {epoch:03d}, Loss: {loss:.4f}, Val MAE: {val_mae:.4f}, Val R2: {val_r2:.4f}, '
