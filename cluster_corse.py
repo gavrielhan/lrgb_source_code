@@ -23,6 +23,7 @@ import networkx as nx
 from torch_geometric.utils import to_networkx
 from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture
+from IPython.display import clear_output
 
 
 
@@ -32,6 +33,7 @@ dataset = LRGBDataset(root='data/LRGBDataset', name='Peptides-struct')
 train_dataset = LRGBDataset(root='data/LRGBDataset', name='Peptides-struct', split='train')
 val_dataset = LRGBDataset(root='data/LRGBDataset', name='Peptides-struct', split='val')
 test_dataset = LRGBDataset(root='data/LRGBDataset', name='Peptides-struct', split='test')
+
 
 class Clustering:
     def __init__(self, clustering_type: str, n_clusters: int, random_state: int = 0):
@@ -55,23 +57,35 @@ class Clustering:
         else:
             raise ValueError("Invalid clustering type. Choose 'KMeans' or 'GMM'.")
 
-    def fit(self, features: torch.Tensor) -> torch.Tensor:
+    def fit(self, features: torch.Tensor, batch: torch.Tensor) -> torch.Tensor:
         """
-        Fits the clustering model to the given features and returns cluster assignments.
+                Fits the clustering model to the given features and returns cluster assignments.
 
-        Args:
-            features (torch.Tensor): Node features (shape: [num_nodes, num_features]).
+                Args:
+                    features (torch.Tensor): Node features (shape: [num_nodes, num_features]).
 
-        Returns:
-            torch.Tensor: Cluster assignments for each node.
+                Returns:
+                    torch.Tensor: Cluster assignments for each node.
         """
-        features_np = features.cpu().numpy()  # Convert to NumPy for sklearn
-        if self.type == 'KMeans':
-            clusters = self.model.fit_predict(features_np)
-        elif self.type == 'GMM':
-            clusters = self.model.fit(features_np).predict(features_np)
-        return torch.tensor(clusters, dtype=torch.long)  # Convert back to PyTorch tensor
+        features_np = features.detach().cpu().numpy()
+        batch_np = batch.detach().cpu().numpy()
 
+        clusters = np.zeros(features_np.shape[0], dtype=int)
+        for b in np.unique(batch_np):
+            mask = batch_np == b
+            if self.type == 'KMeans':
+                clusters[mask] = self.model.fit_predict(features_np[mask]) + clusters.max() + 1
+            elif self.type == 'GMM':
+                clusters[mask] = self.model.fit(features_np[mask]).predict(features_np[mask]) + clusters.max() + 1
+
+        return torch.tensor(clusters, dtype=torch.long)
+
+# Use a single graph from the dataset
+data = dataset[0]
+
+# Step 2: Initialize the clustering class
+n_clusters = 5
+clustering = Clustering(clustering_type='GMM', n_clusters=n_clusters)
 
 
 def _aggregate_features(
@@ -86,12 +100,9 @@ def _aggregate_features(
     return scatter(x, cluster, dim=0, dim_size=size, reduce=reduce)
 
 
-def coarsen_graph(
-    cluster: Tensor,
-    data: Data,
-    transform: Optional[Callable] = None,
-    reduce: str = 'mean',
-) -> Data:
+
+def coarsen_graph(cluster: torch.Tensor, data: Data, reduce: str = 'mean') -> Data:
+
     """
     Coarsens and pools a graph based on clustering information.
 
@@ -104,30 +115,22 @@ def coarsen_graph(
     Returns:
         Data: Coarsened graph data object.
     """
-    # Ensure cluster assignments are consecutive
-    cluster, perm = consecutive_cluster(cluster)
 
-    # Aggregate node features
-    x = None if data.x is None else _aggregate_features(cluster, data.x, reduce=reduce)
+    cluster, perm = torch.unique(cluster, return_inverse=True)
 
-    # Pool edges and edge attributes
-    edge_index = cluster[data.edge_index.reshape(-1)].reshape(2, -1)
-    edge_index, edge_attr = pool_edge(cluster, edge_index, data.edge_attr)
+    x = scatter(data.x, perm, dim=0, reduce=reduce)
+    edge_index = perm[data.edge_index]
+    edge_attr = data.edge_attr
 
-    # Pool batch information if present
-    batch = None if data.batch is None else pool_batch(perm, data.batch)
+    # Remove self-loops and duplicate edges
+    mask = edge_index[0] != edge_index[1]
+    edge_index = edge_index[:, mask]
+    if edge_attr is not None:
+        edge_attr = edge_attr[mask]
 
-    # Pool node positions if present
-    pos = None if data.pos is None else pool_pos(cluster, data.pos)
+    batch = scatter(data.batch, perm, dim=0, reduce='max')
 
-    # Create a new coarsened Data object
-    coarsened_data = Batch(batch=batch, x=x, edge_index=edge_index, edge_attr=edge_attr, pos=pos)
-
-    # Apply optional transformation
-    if transform is not None:
-        coarsened_data = transform(coarsened_data)
-
-    return coarsened_data
+    return Data(x=x, edge_index=edge_index, edge_attr=edge_attr, batch=batch)
 
 
 
@@ -159,3 +162,145 @@ def visualize_graph(data, title="Graph", cluster_assignments=None):
     plt.title(title)
     plt.show()
 
+
+def visualize_graph_with_clusters(data, cluster):
+    """
+    Visualizes the graph with nodes colored based on their cluster assignments.
+
+    Args:
+        data (torch_geometric.data.Data): The input graph data.
+        cluster (torch.Tensor): A tensor assigning each node to a cluster.
+    """
+    # Convert the PyTorch Geometric data to a NetworkX graph
+    G = to_networkx(data, to_undirected=True)
+
+    # Map cluster assignments to node colors
+    cluster_colors = cluster.tolist()
+    unique_clusters = list(set(cluster_colors))
+    num_clusters = len(unique_clusters)
+    # Generate a color map for clusters
+    cmap = plt.cm.get_cmap('tab10', num_clusters)
+    node_colors = [cmap(c) for c in cluster_colors]
+
+    # Plot the graph
+    plt.figure(figsize=(8, 6))
+    pos = nx.spring_layout(G, seed=42)  # Spring layout for visualization
+    nx.draw(G, pos, node_color=cluster_colors, with_labels=True, cmap=plt.cm.tab10, node_size=300)
+    # Add a legend for cluster colors
+    legend_handles = [
+        plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=cmap(c), markersize=10, label=f'Cluster {c}')
+        for c in unique_clusters
+    ]
+    plt.legend(handles=legend_handles, title="Clusters", loc='upper left', bbox_to_anchor=(1, 1))
+    plt.title("Graph Visualization with Cluster Coloring")
+    plt.show()
+
+
+# mlp function from source code
+
+class MLPGraphHead(torch.nn.Module):
+    """
+    MLP prediction head for graph prediction tasks.
+
+    Args:
+        hidden_channels (int): Input dimension.
+        out_channels (int): Output dimension. For binary prediction, dim_out=1.
+        L (int): Number of hidden layers.
+    """
+
+    def __init__(self, hidden_channels, out_channels):
+        super().__init__()
+
+        self.pooling_fun = global_mean_pool
+        dropout = 0.1
+        L = 3
+
+        layers = []
+        for _ in range(L - 1):
+            layers.append(torch.nn.Dropout(dropout))
+            layers.append(torch.nn.Linear(hidden_channels, hidden_channels, bias=True))
+            layers.append(torch.nn.GELU())
+
+        # layers.append(torch.nn.BatchNorm1d(hidden_channels, track_running_stats=False))
+        layers.append(torch.nn.Dropout(dropout))
+        layers.append(torch.nn.Linear(hidden_channels, out_channels, bias=True))
+        self.mlp = torch.nn.Sequential(*layers)
+
+    # def _scale_and_shift(self, x):
+    # return x
+
+    def forward(self,x,batch):
+        x = self.pooling_fun(x,batch)
+
+        return self.mlp(x)
+
+
+# Define GCNConv layers
+
+# Updated GCN model with coarsening
+class GCNWithCoarsening(torch.nn.Module):
+    def __init__(self, in_channels, hidden_channels, out_channels, clustering_type='KMeans', n_clusters=5):
+        super(GCNWithCoarsening, self).__init__()
+
+        self.gcn_conv_layers = torch.nn.ModuleList([
+            GCNConv(in_channels if i == 0 else hidden_channels, hidden_channels)
+            for i in range(3)
+        ])
+        self.clustering = Clustering(clustering_type=clustering_type, n_clusters=n_clusters)
+        self.coarsen_projection = torch.nn.Linear(hidden_channels, hidden_channels)
+        self.gcn_post_coarsen = GCNConv(hidden_channels, hidden_channels)
+        self.head = MLPGraphHead(hidden_channels, out_channels)
+
+    def forward(self, data):
+        x, edge_index, batch = data.x, data.edge_index, data.batch
+        x = x.float()
+
+        for gcn in self.gcn_conv_layers:
+            x = torch.relu(gcn(x, edge_index=edge_index))
+
+        cluster = self.clustering.fit(x, batch)
+        coarsened_data = coarsen_graph(cluster, Data(x=x, edge_index=edge_index, batch=batch))
+
+        coarsened_data.x = self.coarsen_projection(coarsened_data.x)
+        x = torch.relu(self.gcn_post_coarsen(coarsened_data.x, coarsened_data.edge_index))
+
+        return self.head(x, coarsened_data.batch)
+
+# Initialize the model
+model = GCNWithCoarsening(in_channels=9, hidden_channels=250, out_channels=11, n_clusters=5)
+
+# Define optimizer and loss function
+optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+criterion = torch.nn.L1Loss()
+
+train_loader = DataLoader(train_dataset, batch_size=200, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
+test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
+
+# Training loop
+epochs = 100
+for epoch in range(epochs):
+    model.train()
+    total_loss = 0
+    for data in train_loader:
+        optimizer.zero_grad()
+        output = model(data)
+        target = data.y.float()  # Match output shape
+        loss = criterion(output, target)
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item()
+
+    if epoch % 10 == 0:
+        print(f"Epoch {epoch}, Loss: {loss.item():.4f}")
+
+# Testing the model
+model.eval()
+test_loss = 0
+with torch.no_grad():
+    for data in test_loader:
+        output = model(data)
+        target = data.y.float().view_as(output)
+        test_loss += criterion(output, target).item()
+
+print(f"Test Loss: {test_loss / len(test_loader):.4f}")
