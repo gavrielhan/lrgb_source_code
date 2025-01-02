@@ -1,7 +1,4 @@
 import torch
-from torch_geometric.utils import to_scipy_sparse_matrix
-import scipy.sparse as sp
-import torch.nn.functional as F
 from torch_geometric.nn import GCNConv
 from torch_geometric.datasets import LRGBDataset
 from torch_geometric.nn import global_mean_pool
@@ -12,7 +9,6 @@ from torch_geometric.nn import GCN
 import matplotlib.pyplot as plt
 from torch_geometric.data import Data, Batch
 from torch.optim.lr_scheduler import LambdaLR
-from typing import Callable, Optional
 from torch import Tensor
 from torch_geometric.nn.pool.consecutive import consecutive_cluster
 from torch_geometric.nn.pool.pool import pool_batch, pool_edge, pool_pos
@@ -21,7 +17,6 @@ import networkx as nx
 from torch_geometric.utils import to_networkx
 #from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture
-from IPython.display import clear_output
 from fast_pytorch_kmeans import KMeans
 import json
 import os
@@ -165,7 +160,7 @@ class GCNWithCoarsening(torch.nn.Module):
 
         self.gcn_conv_layers = torch.nn.ModuleList([
             GCNConv(in_channels if i == 0 else hidden_channels, hidden_channels)
-            for i in range(2)
+            for i in range(3)
         ])
         self.clustering = Clustering(clustering_type=clustering_type, n_clusters=n_clusters)
         self.coarsen_projection = torch.nn.Linear(hidden_channels, hidden_channels)
@@ -352,12 +347,12 @@ def train_with_logging(model, seeds, epochs, log_dir):
             scheduler.step()
 
             log_entry = {
-                'epoch': epoch,
-                'loss': loss,
-                'val_mae': val_mae,
-                'val_r2': val_r2,
-                'test_mae': test_mae,
-                'test_r2': test_r2
+                'epoch': int(epoch),
+                'loss': float(loss),
+                'val_mae': float(val_mae),
+                'val_r2': float(val_r2),
+                'test_mae': float(test_mae),
+                'test_r2': float(test_r2)
             }
             logs.append(log_entry)
 
