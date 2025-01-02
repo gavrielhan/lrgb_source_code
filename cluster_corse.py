@@ -1,6 +1,5 @@
 import torch
 from torch_geometric.utils import to_scipy_sparse_matrix
-import numpy as np
 import scipy.sparse as sp
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv
@@ -183,7 +182,7 @@ class GCNWithCoarsening(torch.nn.Module):
         cluster = self.clustering.fit(x, batch)
         coarsened_data = coarsen_graph(cluster, Data(x=x, edge_index=edge_index, batch=batch))
 
-        #coarsened_data.x = self.coarsen_projection(coarsened_data.x)
+        coarsened_data.x = self.coarsen_projection(coarsened_data.x)
         x = torch.relu(self.gcn_post_coarsen(coarsened_data.x, coarsened_data.edge_index))
 
         return self.head(x, coarsened_data.batch)
@@ -261,9 +260,6 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model = model.to(device)
 print(model)
 
-# Optimizer
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-
 
 # Learning rate scheduler
 # Define the warmup and cosine decay schedule
@@ -277,14 +273,6 @@ def cosine_with_warmup(epoch):
         return 0.5 * (1 + np.cos(np.pi * progress))
 
 
-# Parameters
-warmup_epochs = 5
-total_epochs = 250  # Total training epochs
-
-# Define the scheduler
-scheduler = LambdaLR(optimizer, lr_lambda=cosine_with_warmup)
-
-torch.manual_seed(3)
 
 print(f'Number of training graphs: {len(train_dataset)}')
 print(f'Number of test graphs: {len(test_dataset)}')
@@ -295,7 +283,7 @@ test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
 
 # Define the training loop
 criterion = torch.nn.L1Loss()  # For MAE-based regression
-
+optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
 def train():
     model.train()
@@ -398,14 +386,7 @@ def train_with_logging(model, seeds, epochs, log_dir):
 warmup_epochs = 5
 total_epochs = 250
 
-def cosine_with_warmup(epoch):
-    if epoch < warmup_epochs:
-        return epoch / warmup_epochs
-    else:
-        progress = (epoch - warmup_epochs) / (total_epochs - warmup_epochs)
-        return 0.5 * (1 + np.cos(np.pi * progress))
-
-seeds = [42, 123, 2023, 0, 7]
+seeds = [42, 123, 2025, 5, 7]
 log_directory = './training_logs'
 
 train_with_logging(model, seeds, total_epochs, log_directory)
