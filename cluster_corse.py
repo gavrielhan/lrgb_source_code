@@ -17,7 +17,7 @@ import networkx as nx
 from torch_geometric.utils import to_networkx
 #from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture
-from fast_pytorch_kmeans import KMeans
+import fast_pytorch_kmeans as fpk
 import json
 import os
 
@@ -48,7 +48,7 @@ class Clustering:
         self.model = None
 
         if clustering_type == 'KMeans':
-            self.model = KMeans(n_clusters=n_clusters)
+            self.model = fpk.KMeans(n_clusters=n_clusters)
             #self.model = KMeans(n_clusters=n_clusters, random_state=random_state,n_init=1)
         elif clustering_type == 'GMM':
             self.model = GaussianMixture(n_components=n_clusters, random_state=random_state)
@@ -65,20 +65,23 @@ class Clustering:
                 Returns:
                     torch.Tensor: Cluster assignments for each node.
         """
-        features_np = features.detach().cpu().numpy()
-        batch_np = batch.detach().cpu().numpy()
+        device = features.device
+        features_np = features.detach().numpy()
+        unique_batches = torch.unique(batch)
 
-        clusters = np.zeros(features_np.shape[0], dtype=int)
-        for b in np.unique(batch_np):
-            mask = batch_np == b
+        clusters = torch.zeros(features.shape[0], dtype=torch.long, device = device)
+        for b in unique_batches:
+            mask = batch == b
+            masked_features = features[mask]
             if self.type == 'KMeans':
-                features_tensor = torch.tensor(features_np[mask], dtype=torch.float32)
+                clusters[mask] = self.model.fit_predict(masked_features) + clusters.max() + 1
+                #features_tensor = torch.tensor(features_np[mask], dtype=torch.float32)
                 #clusters[mask] = self.model.fit_predict(features_np[mask]) + clusters.max() + 1
-                clusters[mask] = self.model.fit_predict(features_tensor) + clusters.max() + 1
+                #clusters[mask] = self.model.fit_predict(features_tensor) + clusters.max() + 1
             elif self.type == 'GMM':
                 clusters[mask] = self.model.fit(features_np[mask]).predict(features_np[mask]) + clusters.max() + 1
 
-        return torch.tensor(clusters, dtype=torch.long,device=features.device)
+        return clusters
 
 
 def coarsen_graph(cluster: torch.Tensor, data: Data, reduce: str = 'mean') -> Data:
@@ -269,6 +272,9 @@ print(model)
 
 
 # Learning rate scheduler
+# Example usage
+warmup_epochs = 5
+total_epochs = 250
 # Define the warmup and cosine decay schedule
 def cosine_with_warmup(epoch):
     if epoch < warmup_epochs:
@@ -291,18 +297,22 @@ test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
 # Define the training loop
 criterion = torch.nn.L1Loss()  # For MAE-based regression
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+scheduler = LambdaLR(optimizer, lr_lambda=cosine_with_warmup)
+
 
 def train():
     model.train()
     total_loss = 0
     for data in train_loader:
         data = data.to(device)
+        data.x = data.x.to(device)
         optimizer.zero_grad()
         out = model(data)
         target = data.y.float().to(device)  # Ensure target is on the same device
         loss = criterion(out, target)
         loss.backward()
         optimizer.step()
+        scheduler.step()
         total_loss += loss.item()
     return total_loss / len(train_loader)
 
@@ -322,8 +332,8 @@ def test(loader):
             out = model(data)
             loss = criterion(out, data.y.float())  # Compute loss
             total_loss += loss.item()
-            pred = out.cpu().numpy()
-            labels = data.y.cpu().numpy()  # Squeeze to remove single-dimensional entries
+            pred = out.numpy()
+            labels = data.y.numpy()  # Squeeze to remove single-dimensional entries
             all_preds.append(pred)
             all_labels.append(labels)
 
@@ -346,7 +356,7 @@ def train_with_logging(model, seeds, epochs, log_dir):
         torch.manual_seed(seed)
         model = model.to(device)
         optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-        scheduler = LambdaLR(optimizer, lr_lambda=cosine_with_warmup)
+        #scheduler = LambdaLR(optimizer, lr_lambda=cosine_with_warmup)
 
         logs = []
 
@@ -356,7 +366,7 @@ def train_with_logging(model, seeds, epochs, log_dir):
             test_mae, test_r2, _ = test(test_loader)
             train_mae, train_r2, _ = test(train_loader)
 
-            scheduler.step()
+            #scheduler.step()
 
             log_entry = {
                 'epoch': int(epoch),
@@ -389,9 +399,6 @@ def train_with_logging(model, seeds, epochs, log_dir):
         plt.savefig(plot_file_path)
         plt.close()
 
-# Example usage
-warmup_epochs = 5
-total_epochs = 250
 
 seeds = [42, 123, 2025, 5, 7]
 log_directory = './training_logs'
