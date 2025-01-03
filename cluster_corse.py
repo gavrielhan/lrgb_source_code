@@ -158,30 +158,44 @@ class GCNWithCoarsening(torch.nn.Module):
     def __init__(self, in_channels, hidden_channels, out_channels, clustering_type='KMeans', n_clusters=5):
         super(GCNWithCoarsening, self).__init__()
 
-        self.gcn_conv_layers = torch.nn.ModuleList([
-            GCNConv(in_channels if i == 0 else hidden_channels, hidden_channels)
-            for i in range(3)
-        ])
+        self.gcn_conv_layers = GCN(
+            in_channels=in_channels,
+            hidden_channels=hidden_channels,
+            out_channels=hidden_channels,
+            num_layers=2,
+            act='gelu',
+            dropout=0.1,
+            norm='batch',
+            norm_kwargs={'track_running_stats': False}
+        )
         self.clustering = Clustering(clustering_type=clustering_type, n_clusters=n_clusters)
         self.coarsen_projection = torch.nn.Linear(hidden_channels, hidden_channels)
-        self.gcn_post_coarsen = GCNConv(hidden_channels, hidden_channels)
+        self.gcn_post_coarsen = GCN(
+            in_channels=hidden_channels,
+            hidden_channels=hidden_channels,
+            out_channels=hidden_channels,
+            num_layers=3,
+            act='gelu',
+            dropout=0.1,
+            norm='batch',
+            norm_kwargs={'track_running_stats': False}
+        )
         self.head = MLPGraphHead(hidden_channels, out_channels)
-
     def forward(self, data):
         x, edge_index, batch = data.x, data.edge_index, data.batch
         x = x.float()
 
-        for gcn in self.gcn_conv_layers:
-            x = torch.relu(gcn(x, edge_index=edge_index))
+        #for gcn in self.gcn_conv_layers:
+            #x = torch.relu(gcn(x, edge_index=edge_index))
+        x = self.gcn_conv_layers(x=x, edge_index=edge_index)
 
         cluster = self.clustering.fit(x, batch)
         coarsened_data = coarsen_graph(cluster, Data(x=x, edge_index=edge_index, batch=batch))
 
         coarsened_data.x = self.coarsen_projection(coarsened_data.x)
-        x = torch.relu(self.gcn_post_coarsen(coarsened_data.x, coarsened_data.edge_index))
+        x = self.gcn_post_coarsen(coarsened_data.x, coarsened_data.edge_index)
 
         return self.head(x, coarsened_data.batch)
-
 
 def visualize_graph(data, title="Graph", cluster_assignments=None):
     """
@@ -247,12 +261,10 @@ def visualize_graph_with_clusters(data, cluster):
 
 
 
-# Initialize the model
-model = GCNWithCoarsening(in_channels=9, hidden_channels=235, out_channels=11, n_clusters=20)
-
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model = model.to(device)
+# Initialize the model
+model = GCNWithCoarsening(in_channels=9, hidden_channels=235, out_channels=11, n_clusters=20).to(device)
 print(model)
 
 
