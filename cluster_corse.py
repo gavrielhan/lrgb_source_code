@@ -1,5 +1,6 @@
 import torch
-from torch_geometric.nn import GCNConv
+#from joblib import Parallel, delayed
+#from torch_geometric.nn import GCNConv
 from torch_geometric.datasets import LRGBDataset
 from torch_geometric.nn import global_mean_pool
 from torch_geometric.loader import DataLoader
@@ -10,8 +11,9 @@ import matplotlib.pyplot as plt
 from torch_geometric.data import Data, Batch
 from torch.optim.lr_scheduler import LambdaLR
 from torch import Tensor
-from torch_geometric.nn.pool.consecutive import consecutive_cluster
-from torch_geometric.nn.pool.pool import pool_batch, pool_edge, pool_pos
+#from torch_geometric.nn.pool.consecutive import consecutive_cluster
+#from torch_geometric.nn.pool.pool import pool_batch, pool_edge, pool_pos
+#from torch_geometric.nn import max_pool
 from torch_geometric.utils import scatter
 import networkx as nx
 from torch_geometric.utils import to_networkx
@@ -20,7 +22,7 @@ from sklearn.mixture import GaussianMixture
 import fast_pytorch_kmeans as fpk
 import json
 import os
-
+from joblib import Parallel, delayed
 
 
 
@@ -65,25 +67,31 @@ class Clustering:
                 Returns:
                     torch.Tensor: Cluster assignments for each node.
         """
-        device = features.device
-        features_np = features.detach().numpy()
-        unique_batches = torch.unique(batch)
 
-        clusters = torch.zeros(features.shape[0], dtype=torch.long, device = device)
-        for b in unique_batches:
-            mask = batch == b
-            masked_features = features[mask]
+        features_np = features.detach().cpu().numpy()
+        batch_np = batch.detach().cpu().numpy()
+        unique_batches = np.unique(batch_np)
+
+        def process_batch(b):
+            mask = batch_np == b
             if self.type == 'KMeans':
-                clusters[mask] = self.model.fit_predict(masked_features) + clusters.max() + 1
-                #features_tensor = torch.tensor(features_np[mask], dtype=torch.float32)
-                #clusters[mask] = self.model.fit_predict(features_np[mask]) + clusters.max() + 1
-                #clusters[mask] = self.model.fit_predict(features_tensor) + clusters.max() + 1
+                features_tensor = torch.tensor(features_np[mask], dtype=torch.float32)
+                return self.model.fit_predict(features_tensor)
             elif self.type == 'GMM':
-                clusters[mask] = self.model.fit(features_np[mask]).predict(features_np[mask]) + clusters.max() + 1
+                return self.model.fit(features_np[mask]).predict(features_np[mask])
 
-        return clusters
+        # Parallel processing
+        clusters = Parallel(n_jobs=-1)(delayed(process_batch)(b) for b in unique_batches)
 
+        # Combine the results
+        combined_clusters = np.zeros(features_np.shape[0], dtype=int)
+        offset = 0
+        for b, cluster in zip(unique_batches, clusters):
+            mask = batch_np == b
+            combined_clusters[mask] = cluster + offset
+            offset += torch.max(cluster) + 1
 
+        return torch.tensor(combined_clusters, dtype=torch.long, device=features.device)
 def coarsen_graph(cluster: torch.Tensor, data: Data, reduce: str = 'mean') -> Data:
 
     """
@@ -165,7 +173,7 @@ class GCNWithCoarsening(torch.nn.Module):
             in_channels=in_channels,
             hidden_channels=hidden_channels,
             out_channels=hidden_channels,
-            num_layers=2,
+            num_layers=3,
             act='gelu',
             dropout=0.1,
             norm='batch',
@@ -346,15 +354,15 @@ def test(loader):
 
 
 # Training loop with logging and saving results
-def train_with_logging(model, seeds, epochs, log_dir):
+def train_with_logging(seeds, epochs, log_dir):
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
     second_sota_gcn_value = 0.2460  # SOTA GCN baseline value
-    first_sota_gcn_value = 0.3496
+    first_sota_gcn_value = 0.3496 #SOTA in LRGB paper
 
     for seed in seeds:
+        model = GCNWithCoarsening(in_channels=9, hidden_channels=235, out_channels=11, n_clusters=22).to(device)
         torch.manual_seed(seed)
-        model = model.to(device)
         optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
         #scheduler = LambdaLR(optimizer, lr_lambda=cosine_with_warmup)
 
@@ -403,4 +411,4 @@ def train_with_logging(model, seeds, epochs, log_dir):
 seeds = [42, 123, 2025, 5, 7]
 log_directory = './training_logs'
 
-train_with_logging(model, seeds, total_epochs, log_directory)
+train_with_logging(seeds, total_epochs, log_directory)
