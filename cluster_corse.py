@@ -1,6 +1,4 @@
 import torch
-#from joblib import Parallel, delayed
-#from torch_geometric.nn import GCNConv
 from torch_geometric.datasets import LRGBDataset
 from torch_geometric.nn import global_mean_pool
 from torch_geometric.loader import DataLoader
@@ -11,18 +9,18 @@ import matplotlib.pyplot as plt
 from torch_geometric.data import Data, Batch
 from torch.optim.lr_scheduler import LambdaLR
 from torch import Tensor
-#from torch_geometric.nn.pool.consecutive import consecutive_cluster
-#from torch_geometric.nn.pool.pool import pool_batch, pool_edge, pool_pos
-#from torch_geometric.nn import max_pool
+from torch_geometric.nn.pool.consecutive import consecutive_cluster
+from torch_geometric.nn.pool.pool import pool_batch, pool_edge, pool_pos
+from torch_geometric.nn import max_pool
 from torch_geometric.utils import scatter
 import networkx as nx
 from torch_geometric.utils import to_networkx
-#from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture
 import fast_pytorch_kmeans as fpk
 import json
 import os
 from joblib import Parallel, delayed
+
 
 
 
@@ -53,7 +51,7 @@ class Clustering:
             self.model = fpk.KMeans(n_clusters=n_clusters)
             #self.model = KMeans(n_clusters=n_clusters, random_state=random_state,n_init=1)
         elif clustering_type == 'GMM':
-            self.model = GaussianMixture(n_components=n_clusters, random_state=random_state)
+            self.model = GaussianMixture(n_components=n_clusters)
         else:
             raise ValueError("Invalid clustering type. Choose 'KMeans' or 'GMM'.")
 
@@ -74,11 +72,8 @@ class Clustering:
 
         def process_batch(b):
             mask = batch_np == b
-            if self.type == 'KMeans':
-                features_tensor = torch.tensor(features_np[mask], dtype=torch.float32)
-                return self.model.fit_predict(features_tensor)
-            elif self.type == 'GMM':
-                return self.model.fit(features_np[mask]).predict(features_np[mask])
+            features_tensor = torch.tensor(features_np[mask], dtype=torch.float32)
+            return self.model.fit_predict(features_tensor)
 
         # Parallel processing
         clusters = Parallel(n_jobs=-1)(delayed(process_batch)(b) for b in unique_batches)
@@ -173,7 +168,7 @@ class GCNWithCoarsening(torch.nn.Module):
             in_channels=in_channels,
             hidden_channels=hidden_channels,
             out_channels=hidden_channels,
-            num_layers=3,
+            num_layers=2,
             act='gelu',
             dropout=0.1,
             norm='batch',
@@ -192,6 +187,7 @@ class GCNWithCoarsening(torch.nn.Module):
             norm_kwargs={'track_running_stats': False}
         )
         self.head = MLPGraphHead(hidden_channels, out_channels)
+        print(clustering_type)
     def forward(self, data):
         x, edge_index, batch = data.x, data.edge_index, data.batch
         x = x.float()
@@ -275,7 +271,7 @@ def visualize_graph_with_clusters(data, cluster):
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # Initialize the model
-model = GCNWithCoarsening(in_channels=9, hidden_channels=235, out_channels=11, n_clusters=20).to(device)
+model = GCNWithCoarsening(in_channels=9, hidden_channels=235, out_channels=11, n_clusters=22).to(device)
 print(model)
 
 
@@ -361,7 +357,7 @@ def train_with_logging(seeds, epochs, log_dir):
     first_sota_gcn_value = 0.3496 #SOTA in LRGB paper
 
     for seed in seeds:
-        model = GCNWithCoarsening(in_channels=9, hidden_channels=235, out_channels=11, n_clusters=22).to(device)
+        model = GCNWithCoarsening(in_channels=9, hidden_channels=235, out_channels=11, n_clusters=20).to(device)
         torch.manual_seed(seed)
         optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
         #scheduler = LambdaLR(optimizer, lr_lambda=cosine_with_warmup)
