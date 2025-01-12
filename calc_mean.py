@@ -3,9 +3,8 @@ import os
 import numpy as np
 os.chdir('/Users/gavrielhannuna/lrgb_source_code/training_logs')
 # List of seed numbers
-#seeds = [2025, 42, 5, 123,18]
-seeds = [42, 123,18,2025]
-LRGB_d = 'Peptides-func'
+seeds = [2025, 42, 5, 123,18]
+LRGB_d = 'Peptides-struct'
 # Path to the JSON files
 if LRGB_d =='Peptides-struct':
     file_pattern = "seed_{seed_num}_logs.json"
