@@ -23,7 +23,7 @@ from torch_geometric.transforms import AddLaplacianEigenvectorPE
 from torch_geometric.transforms import AddRandomWalkPE
 
 # Set dataset name
-LRGB_dat = 'Peptides-struct'  # Options: 'Peptides-func' or 'Peptides-struct'
+LRGB_dat = 'Peptides-func'  # Options: 'Peptides-func' or 'Peptides-struct'
 LRGB_sp = LRGB_dat.split('-')[1]
 
 # Set positional encoding (PE)
@@ -391,9 +391,9 @@ if device == 'cuda':
     val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False, pin_memory=True,num_workers=2)
     test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False, pin_memory=True,num_workers=2)
 else:
-    train_loader = DataLoader(train_dataset, batch_size=1, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=200, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
 
 
 # Define the loss criterion
@@ -460,14 +460,28 @@ def test(loader):
         return mae, r2, total_loss / len(loader)
 
 
+def set_seed(seed: int):
+    # Set the seed for NumPy
+    np.random.seed(seed)
+    # Set the seed for PyTorch (CPU and GPU)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)  # If using multiple GPUs
+    # Ensure deterministic behavior in PyTorch
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
+
 # Training loop with logging and saving results
-seed = 42
-log_directory = './training_logs'
+seed=5
+set_seed(seed)
+log_directory = './training_logs/training_logs_sample'
 
 if not os.path.exists(log_directory):
     os.makedirs(log_directory)
 
-if LRGB_dat=='Peptides-func':
+if LRGB_dat =='Peptides-func':
     second_sota_gcn_value = 0.6860  # SOTA GCN baseline value
     first_sota_gcn_value = 0.5930 #SOTA in LRGB paper
 else:
@@ -478,7 +492,7 @@ logs = []
 
 for epoch in range(1, total_epochs + 1):
     loss = train()
-    if LRGB_dat=='Peptides-func':
+    if LRGB_dat =='Peptides-func':
         val_ap = test(val_loader)
         test_ap = test(test_loader)
         train_ap= test(train_loader)

@@ -1,19 +1,19 @@
 import json
 import os
 import numpy as np
-os.chdir('/Users/gavrielhannuna/lrgb_source_code/training_logs')
+os.chdir('/Users/gavrielhannuna/lrgb_source_code/training_logs/training_logs_sample')
 # List of seed numbers
 seeds = [2025, 42, 5, 123,18]
 LRGB_d = 'Peptides-struct'
+LRGB_sp = LRGB_d.split('-')[1]
 # Path to the JSON files
-if LRGB_d =='Peptides-struct':
-    file_pattern = "seed_{seed_num}_logs.json"
-else:
-    file_pattern = "seed_{seed_num}_logs_func.json"
+
+file_pattern = "seed_{seed_num}_logs_{LRGB_sp}.json"
 
 
-val_key = "val_mae"  # Key for validation metric
-test_key = "test_mae"  # Key for test metric
+
+val_key = "val_metric"  # Key for validation metric
+test_key = "test_metric"  # Key for test metric
 
 
 # Store the averages for the last 10 epochs for each seed
@@ -22,7 +22,7 @@ test_values = []
 
 for seed in seeds:
     # Load the JSON file
-    file_path = file_pattern.format(seed_num=seed)
+    file_path = file_pattern.format(seed_num=seed, LRGB_sp = LRGB_sp)
     with open(file_path, 'r') as f:
         logs = json.load(f)
 
